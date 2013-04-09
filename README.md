@@ -2,10 +2,13 @@
 Lenc
 ===========
 
-A Ruby Gem that maintains encrypted repositories of files, enabling secure, encrypted
+LEnc is a Ruby gem that maintains encrypted repositories of files, enabling secure, encrypted
 backups to free cloud services such as Dropbox, Google Drive, and Microsoft SkyDrive.
 
 Written by Jeff Sember, March 2013.
+
+[Source code documentation can be found here.](http://rubydoc.info/gems/lenc/frames)
+
 
 Directory structure
 --------
