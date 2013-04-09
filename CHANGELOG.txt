@@ -1,0 +1,21 @@
+2013-03-21 
+  * Version 1.0.0 released
+
+2013-03-22 
+  * 1.1.0 released
+  * For added safety, unless the --storekey option is given when the repository is
+    initialized, the key is no longer stored in repository configuration file, and
+    the user is prompted at every update to enter the password.
+
+2013-04-08
+  * 1.1.1 released
+	* Fixed problem with README that was omitting a word
+	* Now allows passwords as short as 8 characters, to agree with documentation
+	* Now omitting symlink'd files (it used to fail upon encountering these)
+	* Added ability to provide update password as command line argument (i.e. lencrypt <pwd>)
+
+2013-04-09
+  * 1.1.2  released
+  * Now hosting on GitHub
+  * Updated README file
+  
