@@ -1,8 +1,26 @@
 require 'set'
 require 'fileutils'
 
+###############################################################
+#
 # Various utility and debug convenience functions.
 #
+###############################################################
+
+# Exception class for objects in illegal states
+#
+class IllegalStateException < Exception
+end
+
+# A string containing a single zero, with ASCII 8-bit encoding (i.e., plain old bytes)
+ZERO_CHAR = "\0".force_encoding("ASCII-8BIT")
+
+# Construct a string of zeros
+# @param count number of zeros
+#
+def zero_bytes(count)
+  ZERO_CHAR * count
+end
 
 # Convenience method to perform 'require_relative' on a set of files
 #
@@ -20,19 +38,15 @@ def req(fileListStr,subdir = nil)
 end
 
 # Shorthand for printf(...)
-# @param args passed to printf
-def pr(*args)
-  printf(*args)
-end
-
+#
+alias :pr :printf
 
 # Convert an object to a human-readable string,
-# or <nil>
+# or <nil>; should be considered a debug-only feature
 # 
 def d(arg)
   arg.nil? ? "<nil>" : arg.inspect
 end
-
 
 # Convert an object to a human-readable string,
 # by calling a type-appropriate function: da, dh, or just d.
@@ -112,8 +126,6 @@ def df(flag, label=nil)
   s
 end
 
-
-
 # Assert that a value is true.  Should be considered a 
 # very temporary, debug-only option; it is slow and
 # generates a warning that it is being called.
@@ -127,63 +139,37 @@ def assert!(cond, *msg)
   end
 end
 
+# Abort with message about unimplemented code
+#
+def unimp!(msg = nil)
+  msg2 = "Unimplemented code"
+  if msg
+    msg2 << ": " << msg
+  end
+  raise Exception, msg2
+end
 
-## Set test directory.  If nil, sets to home directory + "__test__"
-#def setTestDir(d = nil)
-#  $testDir = d || File.join(Dir.home,"__test__")
-#end
- 
-## Get a path within the test directory;
-## create test directory if it doesn't exist.
-##
-## relPath : if nil, returns the test directory; else 
-##   returns the test directory joined to this one
-##
-#def withinTestDir(relPath = nil)
-#  if !$testDir
-#    raise IllegalStateException, "No test directory has been defined"
-#  end
-#  if !File.directory?($testDir)  
-#    Dir::mkdir($testDir)
-#  end
-#  relPath ? File.join($testDir,relPath) : $testDir
-#end
-
-## Convert a .dot file (string) to a PDF file "__mygraph__nnn.pdf" 
-## in the test directory.
-## 
-## It does this by making a system call to the 'dot' utility.
-##
-#def dotToPDF(dotFile, name = "")
-#  gr = dotFile
-#  dotPath = withinTestDir(".__mygraph__.dot")
-#  write_text_file(dotPath,gr)
-#  destName = withinTestDir( "__mygraph__"+name+".pdf")
-#  system("dot -Tpdf "+dotPath+" -o "+destName)
-#end
-
-## Extensions to the Enumerable module
-##
-#module Enumerable
-#  # Calculate a value for each item, and return the item with the
-#  # highest value, its index, and the value.
-#  # @yieldparam function to calculate value of an object, given that object as a parameter
-#  # @return the triple [object, index, value] reflecting the maximum value, or
-#  #   nil if there were no items
-#  def max_with_index 
-#    
-#    best = nil
-#    
-#    each_with_index do |obj,ind|
-#      sc = yield(obj)
-#      if !best || best[2] < sc
-#        best = [obj,ind,sc]
-#      end
-#    end
-#    best
-#  end
-#end
-
+# Extensions to the Enumerable module
+#
+module Enumerable
+  # Calculate a value for each item, and return the item with the
+  # highest value, its index, and the value.
+  # @yieldparam function to calculate value of an object, given that object as a parameter
+  # @return the triple [object, index, value] reflecting the maximum value, or
+  #   nil if there were no items
+  def max_with_index 
+    
+    best = nil
+    
+    each_with_index do |obj,ind|
+      sc = yield(obj)
+      if !best || best[2] < sc
+        best = [obj,ind,sc]
+      end
+    end
+    best
+  end
+end
 
 # Get a nice, concise description of the file and line
 # of some caller within the stack.
@@ -252,6 +238,19 @@ def warn(*args)
   one_time_alert("warning",0, *args)
 end
 
+# Convenience method for setting 'db' true within methods,
+# and to print a one-time warning if so.
+# @param val value to set db to; it is convenient to disable
+#    debug printing quickly by adding a zero, e.g., 'warndb 0'
+#
+def warndb(val = true)
+  if !val || val == 0
+    return false
+  end
+  one_time_alert("warning",1,"Debug printing enabled")
+  true
+end
+
 # Print an 'unimplemented' alert, one time only 
 # @param args if present, calls printf() with these
 def unimp(*args)
@@ -283,22 +282,30 @@ def block
   yield
 end
 
-# Exception class for objects in illegal states
+# Construct hex representation of value
+# @param value integer value
+# @param num_digits number of hex digits
 #
-class IllegalStateException < Exception
-end
-
-
 def to_hex(value, num_digits=4) 
   s = sprintf("%x", value)
   s.rjust(num_digits,'0')
 end
 
+# Hex dump a string or byte array
+# @param byte_array_or_string
+# @param title
+# @param offset offset to first value within array
+# @param length number of values to dump
+# @param bytes_per_row 
+# @param with_text if true, displays ASCII values to right of hex dump
+#
 def hex_dump(byte_array_or_string, title=nil, offset=0, length= -1, bytes_per_row=16, with_text=true) 
   ss = hex_dump_to_string(byte_array_or_string, title, offset, length, bytes_per_row, with_text)
   puts ss
 end
 
+# Hex dump a string or byte array to a string; see hex_dump for parameter descriptions
+#
 def hex_dump_to_string(byte_array_or_string, title=nil, offset=0, length= -1, bytes_per_row=16, with_text=true)
   
   byte_array = byte_array_or_string
@@ -341,9 +348,7 @@ def hex_dump_to_string(byte_array_or_string, title=nil, offset=0, length= -1, by
       else
         ss << '   '
       end
-  
     end
-        
         
     if with_text 
       ss << '  |'
@@ -361,8 +366,6 @@ def hex_dump_to_string(byte_array_or_string, title=nil, offset=0, length= -1, by
     offset += chunk
     break if length <= 0
   end
-    
-  ss << "\n"
   ss
 end
 
@@ -370,6 +373,7 @@ $prevTime = nil
 
 # Calculate time elapsed, in seconds, from last call to this function;
 # if it's never been called, returns zero
+#
 def elapsed 
   curr = Time.now.to_f
   elap = 0
@@ -380,74 +384,9 @@ def elapsed
   elap
 end
 
-# Construct a string from an array of bytes 
-# @param byte_array array of bytes, or string (in which case it
-#   returns it unchanged)
-#
-def bytes_to_str(byte_array)
-  return byte_array if byte_array.is_a? String
-  
-  byte_array.pack('C*')
-end
-
-# Construct an array of bytes from a string  
-# @param str string, or array of bytes (in which case it
-#   returns it unchanged)
-#
-def str_to_bytes(str)
-  return str if str.is_a? Array
-  str.bytes
-end
-
-# Get directory entries, excluding '.' and '..'
-#
-def dir_entries(path)
-  ents = Dir.entries(path)
-  ents.reject!{|entry| entry == '.' || entry == '..'}
-end
-
-# Convenience method for setting 'db' true within methods,
-# and to print a one-time warning if so.
-# @param val value to set db to; it is convenient to disable
-#    debug printing quickly by adding a zero, e.g., 'warndb 0'
-#
-def warndb(val = true)
-  if !val || val == 0
-    return false
-  end
-  one_time_alert("warning",1, "Debug printing enabled")
-  true
-end
-
-
-def int_to_bytes(x)
-  [(x >> 24) & 0xff, (x >> 16) & 0xff, (x >> 8) & 0xff, x & 0xff]
-end
-  
-def short_to_bytes(x) 
-  [(x >> 8) & 0xff, x & 0xff]
-end
- 
-# Decode a short from an array of bytes (big-endian).
-# @param ba array of bytes
-# @param offset offset of first (most significant) byte
-#
-def short_from_bytes(ba, offset=0) 
-  (ba[offset] << 8) | ba[offset + 1] 
-end
-    
-# Decode an int from an array of bytes (big-endian).
-# @param ba array of bytes
-# @param offset offset of first (most significant) byte
-#
-def int_from_bytes(ba, offset=0) 
-  (((((ba[offset] << 8) | ba[offset + 1]) << 8) | \
-      ba[offset + 2]) << 8) | ba[offset + 3]
-end
-
-
 # Delete a file or directory, if it exists.
 # Caution!  If directory, deletes all files and subdirectories.
+#
 def remove_file_or_dir(pth)
   if File.directory?(pth)
     FileUtils.remove_dir(pth)
@@ -456,52 +395,96 @@ def remove_file_or_dir(pth)
   end
 end  
 
-# Transform string to 8-bit ASCII (i.e., just treat each byte as-is)
+require 'stringio'
+
+$IODest = nil
+$OldStdOut = nil
+
+# Redirect standard output to an internal string
 #
-def to_ascii8(str)
-  str.force_encoding("ASCII-8BIT")
+def capture_begin
+    raise IllegalStateException if $IODest
+    $IODest = StringIO.new
+    $OldStdOut, $stdout = $stdout, $IODest
 end
 
-# Verify that a string is encoded as ASCII-8BIT
-def simple_str(s)
-  if s.encoding.name != 'ASCII-8BIT' && s.encoding.name != 'UTF-8'
-    pr("string [%s]\n encoding is %s,\n expected ASCII-8BIT\n",s,s.encoding.name)
-    assert!(false)
+# Restore standard output; return captured text
+# @return text that was redirected
+#
+def capture_end
+  raise IllegalStateException if !$IODest
+  $stdout = $OldStdOut  
+  ret = $IODest.string
+  $IODest = nil
+  ret
+end
+
+# Compare a string with disk file; abort if different.  Disk filename is derived
+# from caller function name; e.g., test_xxx produces filename _output_xxx
+#
+# @param str if not nil, string to compare; if nil, calls capture_end to get string
+#
+def match_expected_output(str = nil)
+
+  if !str
+    str = capture_end
+  end
+
+  cl_method = caller[0][/`.*'/][1..-2]
+  if (cl_method.start_with?("test_"))
+    cl_method = cl_method[5..-1]
+  end
+  path = "_output_" + cl_method + ".txt"
+
+  if !File.file?(path)
+    printf("no such file #{path} exists, writing it...\n")
+    write_text_file(path,str)
+  else
+    exp_cont = read_text_file(path)
+    if str != exp_cont
+      d1 = str
+      d2 = exp_cont
+
+      # Find location where they differ
+      lines1 = d1.split("\n")
+      lines2 = d2.split("\n")
+      j = [lines1.size, lines2.size].max
+
+      s = "???"
+      found_diff = false
+      hist = []
+
+      found_count = 0
+      j.times do |i|
+        found_diff ||= (i >= lines1.size || i >= lines2.size || lines1[i] != lines2[i])
+        s = sprintf("%3d:",i)
+        if !found_diff
+          hist << "#{s}  #{lines1[i]}\n      #{lines2[i]}\n"
+        else
+          if found_count < 3
+            if i < lines1.size
+              s << "  #{lines1[i]}\n"
+            else
+              s << "  ---END---\n"
+            end
+            if i < lines2.size
+              s << "      #{lines2[i]}\n"
+            else
+              s << "      ---END---\n"
+            end
+            hist << s
+          end
+          found_count += 1
+        end
+        while hist.size > 6
+          hist.shift
+        end
+      end
+      dash = "-" * 95 + "\n"
+      raise IllegalStateException,"output did not match expected:\n#{dash}#{hist.join('')}#{dash}"
+    end
   end
 end
-
-# Truncate or pad string so it has a particular size
-#
-# @param s input string
-# @param size 
-# @param pad padding character to use if string needs to grow
-# @return modified string
-#
-def str_sized(s, size, pad="\0")
-  s[0...size].ljust(size,pad)
-end
-
-# Determine if running on the Windows operating system.
-# Note: there is some debate about the best way to do this.
-#
-def windows?
-  if !defined? $__windows__
-    $__windows__ = (RUBY_PLATFORM =~ /mswin/)
-  end
-  $__windows__
-end
-
-# I didn't end up needing this:
-#
-#module Kernel
-#  def suppress_warnings
-#    original_verbosity = $VERBOSE
-#    $VERBOSE = nil
-#    result = yield
-#    $VERBOSE = original_verbosity
-#    return result
-#  end
-#end
 
 # Convenience method to detect if a script is being run
 # e.g. as a 'main' method (for debug purposes only).
@@ -634,3 +617,136 @@ if defined? Test::Unit
   end
 end
 
+# Construct a string from an array of bytes 
+# @param byte_array array of bytes, or string (in which case it
+#   returns it unchanged)
+#
+def bytes_to_str(byte_array)
+  return byte_array if byte_array.is_a? String
+  
+  byte_array.pack('C*')
+end
+
+# Construct an array of bytes from a string  
+# @param str string, or array of bytes (in which case it
+#   returns it unchanged)
+#
+def str_to_bytes(str)
+  return str if str.is_a? Array
+  str.bytes
+end
+
+# Get directory entries, excluding '.' and '..'
+#
+def dir_entries(path)
+  ents = Dir.entries(path)
+  ents.reject!{|entry| entry == '.' || entry == '..'}
+end
+
+def int_to_bytes(x)
+  [(x >> 24) & 0xff, (x >> 16) & 0xff, (x >> 8) & 0xff, x & 0xff]
+end
+  
+def short_to_bytes(x) 
+  [(x >> 8) & 0xff, x & 0xff]
+end
+ 
+# Decode a short from an array of bytes (big-endian).
+# @param ba array of bytes
+# @param offset offset of first (most significant) byte
+#
+def short_from_bytes(ba, offset=0) 
+  (ba[offset] << 8) | ba[offset + 1] 
+end
+    
+# Decode an int from an array of bytes (big-endian).
+# @param ba array of bytes
+# @param offset offset of first (most significant) byte
+#
+def int_from_bytes(ba, offset=0) 
+  (((((ba[offset] << 8) | ba[offset + 1]) << 8) | \
+      ba[offset + 2]) << 8) | ba[offset + 3]
+end
+
+# Transform string to 8-bit ASCII (i.e., just treat each byte as-is)
+#
+def to_ascii8(str)
+  str.force_encoding("ASCII-8BIT")
+end
+
+# Verify that a string is encoded as ASCII-8BIT
+def simple_str(s)
+  if s.encoding.name != 'ASCII-8BIT' && s.encoding.name != 'UTF-8'
+    pr("string [%s]\n encoding is %s,\n expected ASCII-8BIT\n",s,s.encoding.name)
+    assert!(false)
+  end
+end
+
+# Truncate or pad string so it has a particular size
+#
+# @param s input string
+# @param size 
+# @param pad padding character to use if string needs to grow
+# @return modified string
+#
+def str_sized(s, size, pad="\0")
+  s[0...size].ljust(size,pad)
+end
+
+# Determine if running on the Windows operating system.
+# Note: there is some debate about the best way to do this.
+#
+def windows?
+  if !defined? $__windows__
+    $__windows__ = (RUBY_PLATFORM =~ /mswin/)
+  end
+  $__windows__
+end
+
+# Mark all constants ending with '_' as private constants
+#
+# @param entity the class to examine
+# @param add_non_suffix_versions if true, for each constant ABC_ found, also
+#    defines a constant ABC with the same value that is also private
+#
+def privatize(entity, add_non_suffix_versions = false)
+  
+  db = false
+  
+  # First command defines constants ABC = n for each constant ABC_ = n;
+  # Second declares both versions to be private
+  
+  cmd1 = nil
+  cmd2 = nil
+  
+  entity.constants.each do |c|
+    nm = c.to_s
+    
+    if nm.end_with?('_')
+      nm_small = nm[0..-2]
+      
+      if !cmd2
+        if add_non_suffix_versions
+          cmd1 = ''
+        end
+        cmd2 = 'private_constant '
+      else
+        cmd2 << ','
+      end 
+      
+      
+      !cmd1 || cmd1 << entity.to_s << '::' << nm_small << '=' << entity.const_get(c).to_s << "\n"
+      !cmd1 || cmd2 << ':' << nm_small << ','
+      cmd2 << ':' << nm
+    end
+  end
+  
+  if cmd2
+     if cmd1
+       !db || pr("about to eval:\n%s\n",cmd1)
+       eval(cmd1)
+     end
+     !db || pr("about to eval:\n%s\n",cmd2)
+     eval(cmd2)
+  end
+end

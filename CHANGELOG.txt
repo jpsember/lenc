@@ -18,4 +18,6 @@
   * 1.1.2  released
   * Now hosting on GitHub
   * Updated README file
-  
+
+2013-04-15
+  * No longer updating CHANGELOG; see git commit comments instead.  
