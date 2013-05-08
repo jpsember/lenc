@@ -678,6 +678,7 @@ end
 def simple_str(s)
   if s.encoding.name != 'ASCII-8BIT' && s.encoding.name != 'UTF-8'
     pr("string [%s]\n encoding is %s,\n expected ASCII-8BIT\n",s,s.encoding.name)
+    pr("ruby version = #{RUBY_VERSION}\n")
     assert!(false)
   end
 end
@@ -702,6 +703,27 @@ def windows?
   end
   $__windows__
 end
+
+# Make a system call
+#
+# @param cmd command to execute
+# @param abort_if_problem if return code is nonzero, aborts
+# @return [captured output, return code]
+#
+def scall(cmd, abort_if_problem = true)
+#    printf("...(making system call:  #{cmd} )...\n")
+  
+  res = `#{cmd} 2>&1`
+  succ = $?.success?
+  if !succ && abort_if_problem
+    puts("Failed system call '#{cmd}':\n\n#{res}")
+    exit
+  end
+  
+  [res, succ]
+end
+
+
 
 # Mark all constants ending with '_' as private constants
 #

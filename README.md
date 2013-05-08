@@ -5,6 +5,9 @@ Lenc
 LEnc is a Ruby gem that maintains encrypted repositories of files, enabling secure, encrypted
 backups to free cloud services such as Dropbox, Google Drive, and Microsoft SkyDrive.
 
+It can also encrypt or decrypt directory trees 'in place', so that the original files are
+overwritten by their encrypted versions.
+
 Written by Jeff Sember, March 2013.
 
 [Source code documentation can be found here.](http://rubydoc.info/gems/lenc/frames)
@@ -23,8 +26,8 @@ is named "__lenc_repo__.txt").
 versions of all the files found in the <source> directory.  This directory
 is usually mapped to a cloud service (e.g., Dropbox), or perhaps to a thumb drive.
 		
-		NOTE:  THE <encrypted> DIRECTORY IS MANAGED BY THE PROGRAM!  
-		ANY FILES WRITTEN TO THIS DIRECTORY BY THE USER MAY BE DELETED.
+	NOTE:  THE <encrypted> DIRECTORY IS MANAGED BY THE PROGRAM!  
+	ANY FILES WRITTEN TO THIS DIRECTORY BY THE USER MAY BE DELETED.
 
 * A \<recover\> directory.  The program can recover a set of encrypted files here.
 For safety, the this directory must not lie within an existing repository.
@@ -38,16 +41,16 @@ The program can be asked to perform one of the following tasks:
 __Setting up a repository.__  Select a directory you wish to be the \<source\> 
 directory, and make it the current directory.  Type:
     
-		lencrypt -i KEY ENCDIR
+	lencrypt -i ENCDIR
     
-with KEY a set of characters (8 to 56 letters) to be used as the encryption key,
+with KEY a set of characters (up to 56 letters) to be used as the encryption key,
 and ENCDIR the name of the \<encrypted\> directory (it must not already exist, and
 it cannot lie within the current directory's tree).
  
 
 __Updating a repository.__ From within a \<source\> directory tree, type:
 
-		lencrypt
+	lencrypt
     
 You will be prompted for the encryption key, and then the program will examine 
 which files within the \<source\> directory have been changed (since the repository 
@@ -56,17 +59,44 @@ was created or last updated), and re-encrypt these into the \<encrypted\> direct
 
 __Recovering encrypted files.__  Type:
 
-		lencrypt -r KEY ENCDIR RECDIR
+	lencrypt -r ENCDIR RECDIR
     
-with KEY the key associated with a repository whose encrypted files are stored in ENCDIR.
+where ENCDIR contains an encrypted repository's files.
 The recovered files will be stored in RECDIR.
-
 
 Additional options can be found by typing:
 
-		lencrypt -h
+	lencrypt -h
     
-    
+Encrypting files 'in place'
+----------------
+In addition to maintaining encrypted repositories, the gem can also encrypt (and decrypt)
+files 'in place', in effect replacing the files with their encrypted counterparts.  To encrypt
+a particular directory's contents (and all of its subdirectories), from that directory, type:
+
+	encr -i
+
+This marks the directory as the root of an 'in place' repository (by writing a small configuration file).
+You will be prompted for an encryption password.
+
+Once such a repository has been defined, the files can be encrypted. From the repository directory (or
+any of its subdirectories), type:
+
+	encr 
+
+After you enter a password, the program will encrypt all the files (or at least those not marked for
+skipping within a .lencignore file).  If you create any new unencrypted files, you can
+repeat this command to encrypt them.
+
+To decrypt the repository's contents, type:
+
+	encr -d
+
+It is very important to remember the encryption password, since it is NOT stored anywhere by the
+program.  By design, you must enter the correct password twice before any files are encrypted: once when the
+repository is initialized, and again when the actual encryption is to take place.
+
+   
 Ignore files
 ----------------
 If desired, you can avoid storing selected files in the encryption repository.  

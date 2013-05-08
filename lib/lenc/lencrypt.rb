@@ -1,21 +1,17 @@
 require_relative 'repo'
 
-# The application script (i.e., the 'main program')
-#
 class LEncApp
   include LEnc
   
   def run(argv = ARGV) 
-     
+      
     req 'trollop'
     p = Trollop::Parser.new do
-        opt :init, "create new encryption repository: KEY ENCDIR ", :type => :strings
+        opt :init, "create new encryption repository: ENCDIR ", :type => :string
+        opt :key, "encryption key", :type => :string  
         opt :orignames, "(with --init) leave filenames unencrypted"
-        opt :storekey, "(with --init) store the key within the repository configuration file so it" \
-              " need not be entered with every update"
-        opt :update, "update encrypted repository (default operation): KEY", :default => ""
-        #opt :updatepwd, "specify key for update: KEY", :type => :string
-        opt :recover, "recover files from an encrypted repository: KEY ENCDIR RECDIR", :type => :strings
+        opt :update, "update encrypted repository (default operation)"  
+        opt :recover, "recover files from an encrypted repository: ENCDIR RECDIR", :type => :strings
         opt :where, "specify source directory (default = current directory)", :type => :string
         opt :verbose,"verbose operation"
         opt :quiet, "quiet operation"
@@ -34,12 +30,9 @@ class LEncApp
     v = -1 if options[:quiet]
     v = 1  if options[:verbose]
     
-    update_pwd = options[:update]
-    update_pwd = nil if update_pwd.size == 0
-    
     nOpt = 0
     nOpt += 1 if options[:init]
-    nOpt += 1 if update_pwd  
+    nOpt += 1 if options[:update]
     nOpt += 1 if options[:recover]
             
     #pr("trollop opts = %s\n",d2(options))
@@ -52,20 +45,20 @@ class LEncApp
     begin
 
       if (a = options[:init])
-        p.die("Expecting: KEY ENCDIR",nil) if a.size != 2
-        pwd,encDir = a
-        r.create(options[:where], pwd, encDir, options[:orignames], options[:storekey])
+        encDir = a  
+        r.create(options[:where], options[:key], encDir, options[:orignames])
       elsif (a = options[:recover])
-        p.Trollop::die("Expecting: KEY ENCDIR RECDIR",nil) if a.size != 3
-        r.perform_recovery(a[0],a[1],a[2])
+        p.die("Expecting: ENCDIR RECDIR",nil) if a.size != 2
+        r.perform_recovery(options[:key],a[0],a[1])
       else
-        r.open(options[:where],update_pwd)
-        r.perform_update(options[:verifyenc])
+        r.open(options[:where],options[:key])
+        r.perform_encrypt()
       end
 
       r.close()
     rescue Exception =>e
       puts("\nProblem encountered: #{e.message}")
+      puts e.backtrace
     end
 
   end
@@ -73,7 +66,6 @@ end
 
 if __FILE__ == $0
   args = ARGV
-  
   
   LEncApp.new().run(args)
 end

@@ -14,21 +14,15 @@ module RepoInternal
     def initialize
       @dirOnly, @negated, @pathMode, @rexp, @dbPattern = nil
     end  
-    
-    def inspect
-      to_s
-    end
-    def to_s
-      s = "Ign<"
-      s << df(@dirOnly,"dirOnly") << "expr: " << @rexp.to_s << ">"
-      s
-    end
   end
 end
 
 
 module LEnc
 
+  KEY_LEN_MIN = 8
+  KEY_LEN_MAX = 56
+  
   class DecryptionError < Exception 
   end
 
@@ -113,19 +107,51 @@ module LEnc
       end
     end
     
-
+    # If a password hasn't been defined, ask user for one.
+    # Also, pad password out to some minimum size  
+    #
+    def define_password(pwd)
+      if !pwd
+        
+        if true
+          
+          # Use the 'highline' gem to allow typing password without echo to screen
+          require 'rubygems'
+          require 'highline/import'
+          pwd = ask("Password: ") {|q| q.echo = false}
+            
+        else
+          printf("Password: ")
+          pwd = gets
+        end
+        
+        if pwd
+          pwd.strip!
+          pwd = nil if pwd.size == 0
+        end
+        if !pwd
+          raise DecryptionError, "No password given"
+        end
+      end
+      
+      while pwd.size < KEY_LEN_MIN
+        pwd *= 2
+      end
+      pwd
+    end
+    
+    
     # Create a new encryption repository, and open it. 
     # 
-    # @param repo_dir  directory of new repository (nil for current directory)
-    # @param key      encryption key, a string from 8 to 56 characters in length
-    # @param enc_dir   directory to store encrypted files; must not yet exist, and must
-    #                 not represent a directory lying within the repo_dir tree
-    # @param original_names   if true, the filenames are not encrypted, only the file contents
-    # @param store_key  if true, the key is written to the repository configuration file; otherwise,
-    #                   user must supply the key every time the repository is updated
+    # @param repo_dir directory of new repository (nil for current directory)
+    # @param key      encryption key, a string from KEY_LEN_MIN to KEY_LEN_MAX characters in length
+    # @param enc_dir  if not nil, directory to store encrypted files; must not yet exist, and must
+    #                   not represent a directory lying within the repo_dir tree;
+    #                 if nil, repository will be encrypted in-place
+    # @param original_names  if true, the filenames are not encrypted, only the file contents
     # @raise ArgumentError if appropriate
     #
-    def create(repo_dir, key, enc_dir, original_names=false, store_key=true) 
+    def create(repo_dir, key, enc_dir, original_names=false) 
       raise IllegalStateException if @state != STATE_CLOSED 
       
       db = warndb 0
@@ -149,27 +175,33 @@ module LEnc
       
       @orignames = original_names
       
-      edir = File.absolute_path(enc_dir)
       @confFile.set('orignames', @orignames)
       
-      if @verbosity >= 0 
+      if @verbosity >= 1 
           pr("Creating encryption repository %s\n", @confFile.path)
       end
       
-      pp = verifyDirsDistinct([repo_dir, edir])
-      
-      if pp
-        raise ArgumentError, "Directory " + pp[0] + \
-         " is a subdirectory of " + pp[1] 
-      end
+      edir = nil
+      if enc_dir
+        edir = File.absolute_path(enc_dir)
+        pp = verifyDirsDistinct([repo_dir, edir])
+
+        if pp
+          raise ArgumentError, "Directory " + pp[0] + \
+          " is a subdirectory of " + pp[1]
+        end
         
-      if (key.size < 8 || key.size > 56) 
+        if File.exists?(edir)
+          raise ArgumentError, \
+          "Encryption directory or file already exists: '#{edir}'"
+        end
+        @confFile.set('enc_dir', edir)
+      end
+
+      key = define_password(key)
+      if (key.size < KEY_LEN_MIN || key.size > KEY_LEN_MAX) 
         raise ArgumentError, "Password length " + key.size.to_s \
           + " is illegal" 
-      end
-        
-      if store_key
-        @confFile.set('key', key)
       end
       
       # Construct a string that verifies the password is correct
@@ -181,17 +213,10 @@ module LEnc
       vs2 = Base64.urlsafe_encode64(verifier_string)
       @confFile.set('key_verifier', vs2)
       
-      
-      # Create encryption directory
-      if File.exists?(edir)
-        raise ArgumentError, \
-        "Encryption directory or file already exists: '#{edir}'"
-      end
-      
-      @confFile.set('enc_dir', edir)
-      
       if not @dryrun 
-        Dir.mkdir(edir)
+        if edir
+          Dir.mkdir(edir)
+        end
         @confFile.write()
       end
       
@@ -208,9 +233,9 @@ module LEnc
     # @raise  IllegalStateException if repository is already open 
     # @raise  ArgumentError if directory doesn't exist, or does not lie in a repository 
     #
-    def open(startDirectory=nil, password = nil) 
+    def open(startDirectory = nil, password = nil) 
       db = warndb 0
-      !db || pr("Repo.open startDir=%s\n",d(startDirectory))
+      !db || pr("Repo.open startDir=%s, password=%s\n",d(startDirectory),d(password))
         
       raise IllegalStateException if @state != STATE_CLOSED 
         
@@ -242,18 +267,7 @@ module LEnc
       
       # Read values from configuration to instance vars
       @encrDir = @confFile.val('enc_dir')
-      pwd = @confFile.val('key') || password
-      if !pwd
-        printf("Password: ")
-        pwd = gets
-        if pwd
-          pwd.strip!
-          pwd = nil if pwd.size == 0
-        end
-        if !pwd
-          raise DecryptionError, "No password given"
-        end
-      end
+      pwd = define_password(password)
       
       @orignames = @confFile.val('orignames')
       @encrKey = pwd
@@ -277,29 +291,57 @@ module LEnc
       reset_state()
     end
    
-    # Update the repository.  Finds files that need to be re-encrypted and does so.
+    # Encrypt repository's files.
+    # If repo is dual, finds files that need to be re-encrypted and does so.
+    # If singular, encrypts all those files that are not yet encrypted.
+    #
     # Repository must be open.
-    # 
-    # @param verifyEncryption for debug purposes; if true, each file that is encrypted is tested to confirm that
-    #   it decrypts correctly.
     #     
     # @raise IllegalStateException if repository isn't open.
     # 
-    def perform_update(verifyEncryption=false)
+    def perform_encrypt()
       raise IllegalStateException if @state != STATE_OPEN
       
-      setInputOutputDirs(@startDir,@encrDir)
+      enc_dir = @encrDir
+      if in_place?
+        enc_dir = @repoBaseDir
+      end
       
-      @verifyEncryption = verifyEncryption
+      setInputOutputDirs(@startDir,enc_dir)
+      
+      # If encrypting singular repository, ignore all .lencignore files
+      if in_place?
+        pushIgnoreList('', Repo.parseIgnoreList(".lencignore"))
+      end
       
       puts("Encrypting...") if @verbosity >= 1
 
       begin
-        encryptDir(@repoBaseDir, @encrDir)
+        ecrypt_directory_contents(@repoBaseDir, enc_dir)
         puts("...done.") if @verbosity >= 1
       end
     end
          
+    # Decrypt files within singular repository.
+    # Repository must be open.
+    #
+    # @raise IllegalStateException if repository isn't open.
+    #
+    def perform_decrypt()
+      raise IllegalStateException if (@state != STATE_OPEN || !in_place?)
+
+      enc_dir = @repoBaseDir
+
+      setInputOutputDirs(enc_dir,enc_dir)
+
+      puts("Decrypting...") if @verbosity >= 1
+
+      begin
+        decrypt_directory_contents(enc_dir)
+        puts("...done.") if @verbosity >= 1
+      end
+    end
+
   
     # Recover files from a repository's encryption folder.
     # 
@@ -316,6 +358,7 @@ module LEnc
       
       ret = nil
       
+      key = define_password(key)
       @encrKey = key
       
       rd = File.absolute_path(rDir)
@@ -526,6 +569,10 @@ module LEnc
       initIgnoreList()
     end
        
+    def in_place?
+      !@encrDir
+    end
+    
     # Construct the initial ignore list.  
     #       
     # We maintain a stack of these lists, and subsequent operations can push and pop
@@ -580,7 +627,9 @@ module LEnc
     # 
     # Encrypted filenames are also given a prefix to distinguish them
     # from files not created by this program (or filenames that have not been encrypted)
-    # 
+    # If the given filename already has this prefix, it is assumed that the filename has
+    # already been encrypted.
+    #
     # If filenames are not encrypted in this repository, returns filename unchanged.
     #
     def encryptFilename(s)   
@@ -589,6 +638,8 @@ module LEnc
       !db || pr("\n\nencryptFilename %s\n",d(s))
       
       return s if @orignames
+      
+      return s if s.start_with?(ENCRFILENAMEPREFIX) 
       
       nonce = OpenSSL::Digest::SHA1.new(s).digest
       !db || pr(" SHA1 applied, nonce=%s\n",dt(nonce))
@@ -645,7 +696,7 @@ module LEnc
       !db || pr("verify_encrypt_pwd key %s, verifier %s\n",d(key),hex_dump_to_string(key_verifier))
 
       if !MyAES.is_string_encrypted(key, key_verifier)
-        raise(DecryptionError, "#{key} is not the correct password for this repository")
+        raise(DecryptionError, "incorrect password")
       end
     end
     
@@ -674,14 +725,23 @@ module LEnc
   
       
     # Update a single source file if necessary (not a directory)
+    # @param sourceFile absolute path of source file
+    # @param encryptFile absolute path of encrypted file
+    #
     def encrypt_file(sourceFile, encryptFile)
   
-      # If encrypted file is a directory, delete it
+      db = warndb 0
+      !db || pr("encrypt_file\n source=#{sourceFile}\n encrypt=#{encryptFile}\n")
+      
+      # If encrypted file is a directory, delete it.  This can only occur if it's a dual repository.
       if File.directory?(encryptFile) 
+        raise IllegalStateError if in_place?
+        
         pth = rel_path(encryptFile, @outputDir) 
        
         if @verbosity >= 1 
-          msg = "Encrypting file " + rel_path(sourceFile, @inputDir) + " is overwriting existing directory: " + pth
+          msg = "Encrypting file " + rel_path(sourceFile, @inputDir) \
+              + " is overwriting existing directory: " + pth
         end
         
         if not @dryrun 
@@ -690,9 +750,9 @@ module LEnc
       end
       
       # Determine if existing encrypted version exists
-      # and is up to date
-      mustUpdate = (not File.file?(encryptFile))  \
-                    or (File.mtime(encryptFile) < File.mtime(sourceFile))
+      # and is up to date; only if not in-place
+      mustUpdate = in_place? || ((not File.file?(encryptFile))  \
+                    or (File.mtime(encryptFile) < File.mtime(sourceFile)))
       
       if mustUpdate 
         showProgress = (@verbosity >= 0)
@@ -702,38 +762,36 @@ module LEnc
           pr("%s", srcDisp) 
         end
         
-        encPath = convertFile(sourceFile, true, showProgress, false)
-        FileUtils.mv(encPath, encryptFile)
-        
-        
-        if @verifyEncryption
-          # Verify that the original and decoded files are identical
-          decoded_file = convertFile(encryptFile,  false, showProgress, true)
-          files_match = FileUtils.compare_file(sourceFile, decoded_file.path)
-          decoded_file.unlink
-          
-          if !files_match
-            delete_file_or_dir(encryptFile)
-            raise EncryptionVerificationException, \
-              "File '#{srcDisp}' did not encrypt/decrypt correctly" 
-            
-          end
-          if @verbosity >= 0
-            pr(" (file #{srcDisp} encrypted correctly)\n")
-          end
+        temp_enc_path = convertFile(sourceFile, true, showProgress)
+        if not @dryrun
+          FileUtils.mv(temp_enc_path, encryptFile)
         end
+        
       end
     end
         
     # Determine if a file matches one of the expressions in the ignore stack.
     # Searches the stack from top to bottom (i.e., the outermost elements are examined last)
-    def shouldFileBeIgnored(f)
-      db = false
-      !db || pr("shouldFileBeIgnored? #{f}\n")
-      f2 = f
+    # @param name_only filename, without path
+    # @param full_path full path of file
+    #
+    def should_file_be_ignored(name_only, full_path)
+      db = warndb 0
+      !db || pr("should_file_be_ignored? #{name_only}\n")
+      
+      # Let f2 be the filename including the directories corresponding
+      # to the ignore stack
+      
+      f2 = name_only
+      
       @ignoreStack.reverse.each do |dir,ients|
         ients.each do |ient|
-          fArg = ient.pathMode  ? f2 : f
+          
+          if ient.dirOnly && !File.directory?(full_path)
+            next
+          end
+            
+          fArg = ient.pathMode  ? f2 : name_only
           
           matches = ient.rexp.match(fArg) 
           !db || pr("  ent path=#{ient.pathMode} rexp=#{ient.rexp} neg=#{ient.negated} matches=#{matches}\n")
@@ -742,7 +800,7 @@ module LEnc
             return !ient.negated 
           end
         end
-        f2 = dir + f2
+        f2 = File.join(dir,f2)
       end
       
       return false
@@ -760,8 +818,14 @@ module LEnc
          
     # Examine all files in repository; reencrypt those that have changed 
     # (by comparing their time stamps with the time stamps of the encyrypted versions)
-    def encryptDir(sourceDir, encryptDir)
-      db = warndb 0
+    #
+    # @param sourceDir  absolute path of source directory
+    # @param encryptDir absolute path of encryption directory
+    #
+    def ecrypt_directory_contents(sourceDir, encryptDir)
+      
+      db = (warndb 0)
+      
       !db || pr("\n\nencryptDir\n %s =>\n %s\n",d(sourceDir),d(encryptDir))
       
       # Add contents of .lencignore to stack.  If none exists, treat as if empty
@@ -776,10 +840,14 @@ module LEnc
       # Create set of encrypted filenames that belong to this directory, so 
       # we can delete encrypted versions of files that are no longer in the source
       # directory.
-      encFilenameSet = Set.new
+      # Don't do this if repo is in-place.
+      encFilenameSet = nil
+      if !in_place?
+        in_place? || encFilenameSet = Set.new
+      end
       
       # If no encrypted directory exists, create one
-      if not File.directory?(encryptDir) 
+      if !in_place? && !File.directory?(encryptDir) 
         if @verbosity >= 1 
             puts("Creating encrypted directory: " + d(rel_path(encryptDir, @outputDir)))
         end
@@ -805,9 +873,6 @@ module LEnc
         # Convert string to ASCII-8BIT encoding.
         f = to_ascii8(f2)
         
-        !db || pr(" testing if file should be ignored: #{f}\n")
-        ignore = shouldFileBeIgnored(f)
-        
         filePath = File.join(sourceDir,f)
         
         if File.symlink?(filePath)
@@ -817,81 +882,198 @@ module LEnc
           next
         end
         
-        if ignore 
+        !db || pr(" testing if file should be ignored: #{f}\n")
+        if should_file_be_ignored(f, filePath)
           !db || pr("(ignoring %s)\n", rel_path(filePath, @inputDir)) if @verbosity >= 1 
           next
         end
         
-        if f.start_with?(ENCRFILENAMEPREFIX) 
-          if @verbosity >= 0 
-            pr("(Omitting source file / dir with name that looks encrypted: #{d(f)})\n")
+        # If we're doing in-place encryption, file is not a directory, and it's already encrypted, ignore
+        if in_place?
+          next if (!File.directory?(filePath) && f.start_with?(ENCRFILENAMEPREFIX))
+          next if (@orignames && MyAES.is_file_encrypted(@encrKey,filePath))
+        else
+          if f.start_with?(ENCRFILENAMEPREFIX) 
+            if @verbosity >= 0 
+              pr("(Omitting source file / dir with name that looks encrypted: #{d(f)})\n")
+            end
+            next
           end
         end
         
-        encrName = encryptFilename(f)
-        !db || pr(" encrypted filename %s => %s\n",d(f),d(encrName))
         
-        if @verifyEncryption 
-          decrName = decryptFilename(encrName, false)
-          if !decrName || decrName != f 
-            !db || pr("decrName encoding=#{decrName.encoding}\n f encoding=#{f.encoding}\n")
-            !db || hex_dump(decrName,"decrName")
-            !db || hex_dump(f,"f")
-            
-            raise EncryptionVerificationException, \
-             "Filename #{f} did not encrypt/decrypt properly"
+        if !in_place?
+          encrName = encryptFilename(f)
+          !db || pr(" encrypted filename %s => %s\n",d(f),d(encrName))
+          encFilenameSet.add(encrName)
+          encrPath = File.join(encryptDir, encrName)
+          
+          if File.directory?(filePath) 
+            ecrypt_directory_contents(filePath, encrPath)
+          else 
+            !db || pr("...attempting to encrypt file #{filePath} to #{encrPath}...\n")
+            encrypt_file(filePath, encrPath)
           end
-          pr(" (filename #{f} encrypted correctly)\n") if @verbosity >= 0
+        
+        else
+          
+          encrPath = filePath
+          if !@origNames
+            encrName = encryptFilename(f)
+            encrPath = File.join(sourceDir, encrName)
+          end
+          
+          if File.directory?(filePath) 
+            ecrypt_directory_contents(filePath, filePath)
+            # Rename the directory to its encrypted form, if necessary
+            if filePath != encrPath
+              !db || pr(" renaming now-encrypted file from\n  #{filePath}\n to\n  #{encrPath}\n")
+              FileUtils.mv(filePath,encrPath)
+            end
+          else
+            encrypt_file(filePath, encrPath)
+            # Delete unencrypted file, if not using original names
+            if !@orignames && !@dryrun
+              FileUtils.rm(filePath)
+            end
+          end
         end
         
-        encFilenameSet.add(encrName)
-        encrPath = File.join(encryptDir, encrName)
-        
-        if File.directory?(filePath) 
-          encryptDir(filePath, encrPath)
-        else 
-          !db || pr("...attempting to encrypt file #{filePath} to #{encrPath}...\n")
-          encrypt_file(filePath, encrPath)
-        end
       end
      
       # Truncate global ignore list to original length
       popIgnoreList()
       
-      # Examine every file in encrypted directory; delete those that don't correspond to source dir
-      
-      # (if doing dry run, encrypt dir may not exist)
-      
-      !db || pr("examining files in encrypted dir #{encryptDir} to delete ones that don't belong\n")
-      if File.directory?(encryptDir) 
-        dire = dir_entries(encryptDir)
-      else
-        dire = []
-      end
-      
-      dire.each do |f|
-        next if not f.start_with?(ENCRFILENAMEPREFIX)
-  
-        if not encFilenameSet.member? f
-          begin
-            orphanOrigName = decryptFilename(f)
-            next if !orphanOrigName
-            orphanPath = File.join(encryptDir, f)
-            if @verbosity >= 1 
-              printf("Removing encrypted version of missing (or ignored) file " \
-                    +  rel_path(File.join(sourceDir, orphanOrigName), @inputDir) + ": " + orphanPath) 
+      if !in_place?
+        # Examine every file in encrypted directory; delete those that don't correspond to source dir
+
+        # (if doing dry run, encrypt dir may not exist)
+
+        !db || pr("examining files in encrypted dir #{encryptDir} to delete ones that don't belong\n")
+        if File.directory?(encryptDir)
+          dire = dir_entries(encryptDir)
+        else
+          dire = []
+        end
+
+        dire.each do |f|
+          next if not f.start_with?(ENCRFILENAMEPREFIX)
+
+          if not encFilenameSet.member? f
+            begin
+              orphanOrigName = decryptFilename(f)
+              next if !orphanOrigName
+              orphanPath = File.join(encryptDir, f)
+              if @verbosity >= 1
+                printf("Removing encrypted version of missing (or ignored) file " \
+                +  rel_path(File.join(sourceDir, orphanOrigName), @inputDir) + ": " + orphanPath)
+              end
+              if !@dryrun
+                remove_file_or_dir(orphanPath)
+              end
+            rescue DecryptionError
+              # ignore...
             end
-            if !@dryrun 
-              remove_file_or_dir(orphanPath)
-            end
-          rescue DecryptionError 
-            # ignore...
           end
         end
       end
     end
-        
+    
+    # Decrypt all files recursively within singular repository subdirectory
+    #
+    # @param encr_dir_path  absolute path of encrypted directory
+    # @param decr_dir_name  absolute path of directory after decrypting (used for display purposes only);
+    #   if nil, uses encrypted directory name
+    #
+    def decrypt_directory_contents(encr_dir_path,decr_dir_name = nil)
+
+      decr_dir_name ||= encr_dir_path
       
+      db = warndb 0
+
+      !db || pr("\n\ndecrypt_directory_contents: %s (orignames=#{@orignames})\n",d(encr_dir_path))
+
+      # Examine each file in source dir
+      dirc = dir_entries(encr_dir_path)
+
+      dirc.each do |f2|
+        # Convert string to ASCII-8BIT encoding.
+        f = to_ascii8(f2)
+
+        filePath = File.join(encr_dir_path,f)
+        if File.symlink?(filePath)
+          if @verbosity >= 0
+            pr("Omitting symlink file '#{rel_path(filePath,@inputDir)}'\n")
+          end
+          next
+        end
+
+        !db || pr(" filePath=#{filePath}\n")
+        decrPath = filePath
+        decrName = f
+        if @orignames
+          if File.file?(filePath)
+            if !MyAES.is_file_encrypted(@encrKey,filePath)  
+              !db || pr(" file is not encrypted, skipping\n")
+              next
+            end
+          end  
+        else
+          next if !f.start_with?(ENCRFILENAMEPREFIX)
+          begin
+            decrName = decryptFilename(f)
+            decrPath = File.join(encr_dir_path, decrName)
+          rescue DecryptionError => e
+            puts "Unable to decrypt filename #{f}"
+            next
+          end
+        end
+
+        if File.directory?(filePath)
+          decrypt_directory_contents(filePath, File.join(decr_dir_name, decrName))
+          # Rename the directory to its decrypted form, if filenames are to be encrypted
+          if !@orignames
+            raise ArgumentError,"decrypted already exists: #{decrPath}" \
+                          if File.exist?(decrPath)
+                        
+            !db || pr(" renaming now-decrypted directory from\n  #{filePath}\n to\n  #{decrPath}\n")
+            FileUtils.mv(filePath,decrPath)
+          end
+        else
+          decrPathDisp = File.join(decr_dir_name,decrName)
+          pth = rel_path(decrPathDisp, @repoBaseDir)
+          showProgress = @verbosity >= 0
+          if showProgress
+            pr("%s", pth)
+          end
+          begin
+            tmp_file = convertFile(filePath, false, showProgress)
+            if !@orignames
+              raise ArgumentError,"decrypted file or directory already exists: #{decrPath}" \
+              if File.exist?(decrPath)
+            end
+               
+            if not @dryrun
+              remove_file_or_dir(decrPath)
+              FileUtils.mv(tmp_file.path, decrPath)
+              # Remove the encrypted version, if we aren't using original names
+              if !@orignames
+                FileUtils.rm(filePath)
+              end
+            else
+              tmp_file.unlink
+            end
+
+          rescue DecryptionError => e
+            if @verbosity >= 0
+              msg = "Unable to decrypt file: #{pth} (cause: #{e.message})"
+              pr("\n%s\n", msg)
+            end
+          end
+        end
+      end
+    end
+          
     # Decrypt all files (and, recursively, folders) within a directory to _recover folder
     def recover(encryptDir, recoverDir) 
       db = warndb 0
@@ -916,7 +1098,10 @@ module LEnc
       dirc.each do |f|
         
         !db || pr("...file=%s\n",d(f))
-        if shouldFileBeIgnored(f)
+          
+        encrFullPath = File.join(encryptDir, f)
+                
+        if should_file_be_ignored(f, encrFullPath)
           if @verbosity >= 1 
             pr("(ignoring %s)\n", rel_path(f, @inputDir)) 
           end
@@ -943,7 +1128,6 @@ module LEnc
           origName = decrName
         end
         origPath = File.join(recoverDir, origName)
-        encrFullPath = File.join(encryptDir, f)
         
   
         # If decrypted version already exists, and is more recent than the 
@@ -999,7 +1183,7 @@ module LEnc
     # @param encrypt true if encrypting
     # @return temporary file containing modified file
     #
-    def convertFile(srcPath,encrypt, showProgress=false, verifying=false) 
+    def convertFile(srcPath,encrypt, showProgress=false) 
   
       db = warndb 0
       !db||pr("\n\n\n\nconvertFile\n %s\n",d(srcPath))
@@ -1023,10 +1207,6 @@ module LEnc
         showDots = showProgress && chunksRemaining >= dotSize
         !db || (showDots = false)
         
-        if showDots and verifying 
-          pr(" verifying:")
-        end
-          
         !db || pr("\n encrKey=%s\n",dt(@encrKey))
         
         bf = MyAES.new(encrypt, @encrKey)
@@ -1072,7 +1252,7 @@ module LEnc
         
       end 
           
-      if showProgress and (showDots or not verifying) 
+      if showProgress 
         pr("\n")
       end
       

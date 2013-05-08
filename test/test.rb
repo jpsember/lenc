@@ -4,12 +4,16 @@ require_relative '../lib/lenc/tools.rb'
 req('repo lencrypt')
 
 
-#SINGLETEST = "test_101_update_repo_with_verify"
+#SINGLETEST = "test_121_update_repo_with_lencrypt_program"
 if defined? SINGLETEST
   if main?(__FILE__)
     ARGV.concat("-n  #{SINGLETEST}".split)
   end
 end
+
+# Enable to display verbose output
+#ARGV.concat("-v")
+
 
 class RepoTest < MyTestSuite
 
@@ -32,6 +36,7 @@ class RepoTest < MyTestSuite
     mkdir(@@testDir)
       
     @@sourceDir = File.join(@@testDir,"__source__")
+    @@sourceDir2 = File.join(@@testDir,"ip")
     @@encryptDir = File.join(@@testDir,"__encrypted__")
     @@recoverDir = File.join(@@testDir,"__recovered__")
     @@repoFile = File.join(@@sourceDir,Repo::LENC_REPO_FILENAME)
@@ -41,7 +46,7 @@ class RepoTest < MyTestSuite
     if !File.directory?(@@sourceDir)
       create_source_tree()
     end
-    
+
     clean()
     
     # Construct a list of the source subdirectories, since some of them have
@@ -144,18 +149,18 @@ class RepoTest < MyTestSuite
       pluto|
 SCR
       
-      # Script of predetermined file lengths:
+    # Script of predetermined file lengths:
     cs = RepoInternal::CHUNK_SIZE_ENCR
     hs = RepoInternal::CHUNK_HEADER_SIZE
     flens = [0, cs - 1, cs, cs + 1, cs + hs - 1, cs + hs, cs + hs + 1,
-             (2 * cs) - 1, 2 * cs, 2 * cs + 1, 2 * (cs + hs) - 1, 2 * (cs + hs), 2 * (cs + hs) + 1]
+      (2 * cs) - 1, 2 * cs, 2 * cs + 1, 2 * (cs + hs) - 1, 2 * (cs + hs), 2 * (cs + hs) + 1]
     fNum = 0
-    
+
     srand(1983)
-    
-    dr = @@sourceDir 
+
+    dr = @@sourceDir
     mkdir(dr)
-    
+
     dirStack = []
     k = 0
     k0 = k
@@ -163,29 +168,36 @@ SCR
       c = scr[k]
       k += 1
       next if !"|/^".index(c)
-      
+
       nm = scr[k0...k-1].strip
-      
+
       k0 = k
-      
-      if c == '|'  
+
+      if c == '|'
         # create a file; use our predetermined lengths, if we still have some;
         # otherwise, choose a random file length
         if fNum < flens.size
           j = flens[fNum]
-        else  
+        else
           j = (rand() * rand() * 130000).to_i + 3
         end
+
+        # Make the length end with a particular sequence of digits so we can quickly determine whether
+        # file has been encrypted or decrypted
+        q = (j - 11) % 100
+        j -= q
+        j += 100 if j <= 0
+
         fNum += 1
         makeFile(File.join(dr, nm), j)
       elsif c == '/'
-          dirStack.push(dr)
-          dr = File.join(dr,nm)
-          mkdir(dr)
-elsif c == '^'
-          dr = dirStack.pop
-end
-end
+        dirStack.push(dr)
+        dr = File.join(dr,nm)
+        mkdir(dr)
+      elsif c == '^'
+        dr = dirStack.pop
+      end
+    end
 
       # Store some .lencignore files
     dr = @@sourceDir
@@ -199,6 +211,18 @@ end
   end
 
 
+  # Create in-place source tree as copy of normal source tree
+  def create_source_tree2
+    if !File.exist?(@@sourceDir2)
+      remove_file_or_dir(@@sourceDir2)
+      FileUtils.cp_r(@@sourceDir,@@sourceDir2)
+    end
+    remove_file_or_dir(File.join(@@sourceDir2,".lenc"))
+  end
+  
+
+  
+  
   def writeIgnore(dr, contents)  
     pth = File.join(dr,Repo::IGNOREFILENAME)
     File.open(pth,'w') do |f|
@@ -210,7 +234,8 @@ end
     if args.is_a? String
       args = args.split
     end
-    args.concat(["-w", @@sourceDir, "-q"])
+    args.concat(["-w", @@sourceDir])
+    args.concat(["-q"])
     LEncApp.new().run(args)
   end
   
@@ -234,14 +259,14 @@ end
   
   def update_repo(silent = true)
     rp = build_repo_obj(silent)
-    rp.open(@@sourceDir)
-    rp.perform_update
+    rp.open(@@sourceDir,@@key)
+    rp.perform_encrypt
     rp.close  
   end
   
   def do_recover
     rp = build_repo_obj
-    rp.perform_recovery(@@key, @@encryptDir,@@recoverDir)
+    rp.perform_recovery(@@key, @@encryptDir, @@recoverDir)
     rp.close
   end
   
@@ -304,25 +329,25 @@ end
   end
   
   # Create repo using lencrypt program
-  def test_101_create_repo
+  def test_101_create_repo_with_lencrypt_program
     clean
-    a = "-i #{@@key} #{@@encryptDir} --storekey"
+    a = "--init #{@@encryptDir} --key #{@@key}"
     ex(a)
   end
 
   def test_101_update_repo_with_verify
     clean
-    ex("-i #{@@key} #{@@encryptDir} --storekey")
+    ex("--init #{@@encryptDir} --key #{@@key}")
     rp = build_repo_obj
-    rp.open(@@sourceDir)
-    rp.perform_update(true)
+    rp.open(@@sourceDir,@@key)
+    rp.perform_encrypt()
     rp.close  
   end
 
   def test_110_open_repo_using_Repo_class
     # (assumes repo exists at this point; preceding test creates it)
     rp = build_repo_obj
-    rp.open(@@sourceDir)
+    rp.open(@@sourceDir,@@key)
   end
 
   def test_120_update_repo_using_Repo_class
@@ -331,8 +356,11 @@ end
   end
   
   def test_121_update_repo_with_lencrypt_program  
+    create_repo
     remove_file_or_dir(@@encryptDir)
-    ex("")
+    
+     ex("--key #{@@key}")
+    
     assert(File.directory?(@@encryptDir))
   end
 
@@ -353,7 +381,7 @@ end
   
   def test_200_recover_with_incorrect_password   
     create_repo
-    ex("") # updates repo
+    ex("--key #{@@key}") # updates repo
     assert_raise(DecryptionError) do
       remove_file_or_dir(@@recoverDir)
       rp = build_repo_obj()
@@ -361,5 +389,45 @@ end
       rp.close
     end
   end
+  
+  def test_300_singular_repo
+    create_source_tree2
+    
+    # Create in-place repository
+    rp = build_repo_obj
+    rp.create(@@sourceDir2,@@key,nil)
+    rp.close  
+
+    # Update the repo
+    rp = build_repo_obj   
+    rp.open(@@sourceDir2, @@key)
+    rp.perform_encrypt()
+    rp.close
+    
+       
+  end
+  
+def test_310_singular_encrypt_then_decrypt
+  
+  create_source_tree2
+  
+  # Create in-place repository
+  rp = build_repo_obj
+  rp.create(@@sourceDir2,@@key,nil)
+  rp.close  
+
+  # Update the repo
+  rp = build_repo_obj
+  rp.open(@@sourceDir2, @@key)
+  rp.perform_encrypt()
+  rp.close
+  
+  # Try decrypting
+  rp = build_repo_obj
+  rp.open(@@sourceDir2, @@key)
+  rp.perform_decrypt()
+  rp.close
+end
+
   
 end

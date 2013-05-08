@@ -142,7 +142,8 @@ module RepoInternal
       
 =end
   class MyAES 
-    
+    attr_accessor :prefix_mode
+
     private
     
     # decryptState values
@@ -153,6 +154,7 @@ module RepoInternal
     # to help generate unique nonces (in conjunction with system clock)
     @@nonceHelper = 0
       
+    
     # Construct a MyAES object to encrypt/decrypt a sequence of bytes.
     # @param encrypting true for encryption, false for decryption
     # @param key   a bytearray of 4..56 bytes
@@ -179,7 +181,7 @@ module RepoInternal
       key = bytes_to_str(key)
         
       if key.size < 4 || key.size > 56
-          raise ArgumentError, 'Key length not 4..56 bytes' 
+          raise ArgumentError, "Key length ##{key.size} not 4..56 bytes" 
       end
         
       # expand the key to be at least 32 bytes
@@ -304,28 +306,37 @@ module RepoInternal
           raise LEnc::DecryptionError, "header doesn't verify"
         end
           
-        nPadBytes = newData[CHUNK_VERIFY_SIZE].ord  
-        actualEnd = csize - nPadBytes
-        if nPadBytes > 16 or actualEnd < CHUNK_HEADER_SIZE 
-          raise LEnc::DecryptionError, "nPadBytes/actualEnd mismatch"
-        end  
+        # If we're in prefix mode, we're only interested in whether
+        # the chunk start matches the verification string above; we 
+        # don't actually produce any decoded data (partly because we
+        # do not really know how many padding bytes there are in the
+        # decryption stream)
         
-        
+        if !prefix_mode
 
-        # Verify that the padding bytes have correct values
-        (actualEnd...csize).each do |i|
-          if newData[i] != PAD_CHAR
-            raise LEnc::DecryptionError,"padding char bad value"
+          nPadBytes = newData[CHUNK_VERIFY_SIZE].ord
+          actualEnd = csize - nPadBytes
+          if nPadBytes > 16 or actualEnd < CHUNK_HEADER_SIZE
+            raise LEnc::DecryptionError, "nPadBytes/actualEnd mismatch"
           end
+
+          # Verify that the padding bytes have correct values
+          (actualEnd...csize).each do |i|
+            if newData[i] != PAD_CHAR
+              raise LEnc::DecryptionError,"padding char bad value"
+            end
+          end
+
+          newData = newData[CHUNK_HEADER_SIZE ... actualEnd]
+
+          @inputBuffer.slice!(0,csize)
+          @outputBuffer  << newData
+
         end
-          
-        newData = newData[CHUNK_HEADER_SIZE ... actualEnd]
-          
-        @decryptState = DS_WAITCHUNK
-          
-        @inputBuffer.slice!(0,csize)
-        @outputBuffer  << newData
         
+        @decryptState = DS_WAITCHUNK
+  
+
       end
       
       incrNonce()
@@ -427,26 +438,43 @@ module RepoInternal
     # Returns true iff the start of the string seems to decrypt correctly
     # for the given password
     def self.is_string_encrypted(key, test_str) 
-      db = warndb 0
+      db = warndb  0
       
-      !db || hex_dump(test_str, "areBytesEncrypted?")
+      !db || hex_dump(test_str, "is_string_encrypted?")
       
       simple_str(test_str)
       
       lnth = test_str.size
       lnth -= NONCE_SIZE_SMALL
-      if lnth < AES_BLOCK_SIZE 
-        !db || pr("  insufficient # bytes\n")
+      if lnth < AES_BLOCK_SIZE || lnth % AES_BLOCK_SIZE != 0
+        !db || pr("  bad # bytes\n")
         return false
       end
       
+      hdr_size = AES_BLOCK_SIZE
+      
+      # This method is failing, I suspect because with the mode of AES we're using (CRC?) we can't
+      # decrypt only a single block, and must instead decrypt a complete chunk.
+      
+      # No, now I think it's interpreting a bad 'padding' value (due to only decrypting partially)
+      # as indication of bad decryption
+      
+      if false
+        warn("using full chunk size")
+        hdr_size = [lnth,CHUNK_SIZE_ENCR].min
+      end
+      
       begin
-          de = MyAES.new(false, key)    
-          de.finish(test_str[0...AES_BLOCK_SIZE + NONCE_SIZE_SMALL])
-          decr = de.flush()
-          !db || hex_dump(decr,"decrypted successfully")
-      rescue LEnc::DecryptionError
-        !db || pr(" (caught DecryptionError)\n")
+          de = MyAES.new(false, key)  
+          
+          # Put this decryptor into prefix mode, so that we are only interested
+          # in whether the header verifies correctly
+          de.prefix_mode = true
+               
+          de.finish(test_str[0...hdr_size + NONCE_SIZE_SMALL])
+          de.flush()
+      rescue LEnc::DecryptionError => e
+        !db || pr(" (caught DecryptionError #{e})\n")
         return false
       end
         
@@ -460,20 +488,34 @@ module RepoInternal
     # for the given password, and the file is of the expected length.
     def self.is_file_encrypted(key, path) 
       
+      db = warndb 0
+      
+      !db || pr("is_file_encrypted '#{path}'?\n")
     #    key = str_to_bytes(key)
       
       if not File.file?(path) 
+        !db || pr(" not a file\n")
         return false
       end
       
       lnth = File.size(path)
       minSize = NONCE_SIZE_SMALL + AES_BLOCK_SIZE
-      if lnth < minSize or ((lnth - minSize) % _AES_BLOCK_SIZE) != 0
+      !db || pr(" file size=#{lnth}, minSize=#{minSize}\n")
+      if lnth < minSize or ((lnth - minSize) % AES_BLOCK_SIZE) != 0
+        !db || pr(" length not appropriate\n")
         return false
       end
       
+      if false
+        warn("using full size of file")
+        minSize = lnth
+      end
+      
       f = File.open(path,"rb")
-      return is_string_encrypted(key, f.read(minSize))
+      s = f.read(minSize)
+      ret = is_string_encrypted(key, s)
+      !db || pr(" is_string_encrypted returning #{ret}\n")
+      ret
     end
   
   
@@ -485,35 +527,68 @@ end # module RepoInternal
 if main? __FILE__
   
   s = ''
-  16.times {|x| s << (65+x).chr}
-    
+  17.times {|x| s << (65+x).chr}
+  s *= 8 
 
   nonce  = "abc" * 20
   nonce  = nonce[0...16]
   key = "onefishtwofishredfishbluefish" * 3
   key = key[0...32]
   
-  hex_dump(key,"key")
-  hex_dump(nonce,"nonce")
   
-  aes = OpenSSL::Cipher.new("AES-256-CBC")
-      
-  aes.padding = 0
-  aes.encrypt
-  aes.key = key
-        
-  aes.iv = nonce
-        
-  enc = aes.update(s)
-  enc << aes.final
-        
-  hex_dump(s,"calling aes.encrypt with")
-  hex_dump(enc,"aes.encrypt returned")
+  if false # this seems to work, disable for now
+    hex_dump(key,"key")
+    hex_dump(nonce,"nonce")
 
-  s = enc
+    aes = OpenSSL::Cipher.new("AES-256-CBC")
+
+    aes.padding = 0
+    aes.encrypt
+    aes.key = key
+
+    aes.iv = nonce
+
+    enc = aes.update(s)
+    enc << aes.final
+
+    hex_dump(s,"calling aes.encrypt with")
+    hex_dump(enc,"aes.encrypt returned")
+
+    s = enc
+
+    require 'base64'
+    s = Base64.urlsafe_encode64(s)
+    hex_dump(s,"base64")
+
+    # Verify that we don't need every block to verify encryption
+    aes = OpenSSL::Cipher.new("AES-256-CBC")
+    aes.padding = 0
+    aes.decrypt
+    aes.key = key
+    aes.iv = nonce
+
+    dec = aes.update(enc[0...16])
+    dec << aes.final
+
+    hex_dump(dec,"decrypted")
+  end
+
+  include RepoInternal
   
-  require 'base64'
-  s = Base64.urlsafe_encode64(s)
-  hex_dump(s,"base64")
+  aes = MyAES.new(true, key, nonce)
+  
+  aes.finish(s)
+  enc = aes.flush()
+  
+  hex_dump(enc,"encrypted")
+  
+  aes = MyAES.new(false, key)
+  aes.finish(enc)
+  dec = aes.flush()
+  hex_dump(dec,"decrypted")
+  
+  isenc = MyAES.is_string_encrypted(key, enc)
+  pr("is encrypted= #{isenc}\n")
+  
 
 end
