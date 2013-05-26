@@ -69,9 +69,13 @@ module LEnc
     end
     
     
+    # We now ignore 'dot-underscore' files which OSX seems to create sometimes
+    # to store additional information about other files.
+    
     DEFAULTIGNORE = \
       "#{LENC_REPO_FILENAME}\n " \
        ".DS_Store\n" + \
+       "._*\n" + \
       ".recoverdefaults\n"
 
     STATE_CLOSED = 0
@@ -300,11 +304,13 @@ module LEnc
     # @raise IllegalStateException if repository isn't open.
     # 
     def perform_encrypt()
+      db = warndb 0
       raise IllegalStateException if @state != STATE_OPEN
       
       enc_dir = @encrDir
       if in_place?
         enc_dir = @repoBaseDir
+        !db || pr("perform_encrypt, enc_dir set to repoBaseDir #{@repoBaseDir}\n")
       end
       
       setInputOutputDirs(@startDir,enc_dir)
@@ -317,7 +323,7 @@ module LEnc
       puts("Encrypting...") if @verbosity >= 1
 
       begin
-        ecrypt_directory_contents(@repoBaseDir, enc_dir)
+        encrypt_directory_contents(@repoBaseDir, enc_dir)
         puts("...done.") if @verbosity >= 1
       end
     end
@@ -763,8 +769,10 @@ module LEnc
         end
         
         temp_enc_path = convertFile(sourceFile, true, showProgress)
+        !db || pr(" converted [#{sourceFile}] to temp [#{temp_enc_path}]\n")
         if not @dryrun
           FileUtils.mv(temp_enc_path, encryptFile)
+          !db || pr("  moved temp to encryptFile #{encryptFile}\n")
         end
         
       end
@@ -822,9 +830,9 @@ module LEnc
     # @param sourceDir  absolute path of source directory
     # @param encryptDir absolute path of encryption directory
     #
-    def ecrypt_directory_contents(sourceDir, encryptDir)
+    def encrypt_directory_contents(sourceDir, encryptDir)
       
-      db = (warndb 0)
+      db = warndb 0
       
       !db || pr("\n\nencryptDir\n %s =>\n %s\n",d(sourceDir),d(encryptDir))
       
@@ -869,6 +877,7 @@ module LEnc
       # Examine each file in source dir
       dirc = dir_entries(sourceDir)
       
+      !db || pr(" dirc=%s\n",d2(dirc))
       dirc.each do |f2|
         # Convert string to ASCII-8BIT encoding.
         f = to_ascii8(f2)
@@ -909,7 +918,7 @@ module LEnc
           encrPath = File.join(encryptDir, encrName)
           
           if File.directory?(filePath) 
-            ecrypt_directory_contents(filePath, encrPath)
+            encrypt_directory_contents(filePath, encrPath)
           else 
             !db || pr("...attempting to encrypt file #{filePath} to #{encrPath}...\n")
             encrypt_file(filePath, encrPath)
@@ -924,16 +933,17 @@ module LEnc
           end
           
           if File.directory?(filePath) 
-            ecrypt_directory_contents(filePath, filePath)
+            encrypt_directory_contents(filePath, filePath)
             # Rename the directory to its encrypted form, if necessary
-            if filePath != encrPath
+            if (not @dryrun) && (filePath != encrPath)  
               !db || pr(" renaming now-encrypted file from\n  #{filePath}\n to\n  #{encrPath}\n")
               FileUtils.mv(filePath,encrPath)
             end
           else
             encrypt_file(filePath, encrPath)
             # Delete unencrypted file, if not using original names
-            if !@orignames && !@dryrun
+            if (not @dryrun) && (not @orignames)
+              !db || pr(" attempting to remove unencrypted file #{filePath}\n")
               FileUtils.rm(filePath)
             end
           end
@@ -968,7 +978,7 @@ module LEnc
                 printf("Removing encrypted version of missing (or ignored) file " \
                 +  rel_path(File.join(sourceDir, orphanOrigName), @inputDir) + ": " + orphanPath)
               end
-              if !@dryrun
+              if not @dryrun
                 remove_file_or_dir(orphanPath)
               end
             rescue DecryptionError
@@ -1035,9 +1045,11 @@ module LEnc
           if !@orignames
             raise ArgumentError,"decrypted already exists: #{decrPath}" \
                           if File.exist?(decrPath)
-                        
-            !db || pr(" renaming now-decrypted directory from\n  #{filePath}\n to\n  #{decrPath}\n")
-            FileUtils.mv(filePath,decrPath)
+            
+            if not @dryrun            
+              !db || pr(" renaming now-decrypted directory from\n  #{filePath}\n to\n  #{decrPath}\n")
+              FileUtils.mv(filePath,decrPath)
+            end
           end
         else
           decrPathDisp = File.join(decr_dir_name,decrName)
@@ -1084,7 +1096,9 @@ module LEnc
         if File.file?(recoverDir)
           raise RecoveryError, "Cannot replace existing file '" + recoverDir + "' with directory" 
         end
-        Dir.mkdir(recoverDir) if not @dryrun
+        if not @dryrun
+          Dir.mkdir(recoverDir) 
+        end
       end
         
       if not File.directory?(encryptDir)
@@ -1196,7 +1210,7 @@ module LEnc
         
         fr = File.open(srcPath, 'rb')
         fw = Tempfile.new("repo")
-        
+        !db || pr("created temporary file #{fw.path}\n")
         cSize = 100000
         
         # Predict number of chunks required
@@ -1256,6 +1270,7 @@ module LEnc
         pr("\n")
       end
       
+      !db || pr(" (done convertFile)\n")
       fw
     end
     

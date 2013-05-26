@@ -15,6 +15,7 @@ class EncrApp
         opt :verbose,"verbose operation"
         opt :where, "specify source directory (default = current directory)", :type => :strings
         opt :quiet, "quiet operation"
+        opt :dryrun, "show which files will be modified, but make no changes"
     end
     
     options = Trollop::with_standard_exception_handling p do
