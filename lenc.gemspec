@@ -2,7 +2,7 @@ require 'rake'
 
 Gem::Specification.new do |s|
   s.name        = 'lenc'
-  s.version     = '1.2.1'
+  s.version     = '1.2.2'
   s.date        = Time.now
   s.summary     = 'Maintains an encrypted repository of a set of files for secure cloud storage.'
 
