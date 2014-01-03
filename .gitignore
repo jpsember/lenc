@@ -1,3 +1,4 @@
-doc/**
-.project
+*/*.gem
+doc
+lenc.sublime-*
 
